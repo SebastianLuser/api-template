@@ -1,0 +1,36 @@
+# Fintech API Local Configuration
+server:
+  port: "8080"
+
+# Database configuration
+mysql:
+  master:
+    user: fintech_user
+    pass_env_var: DB_PASS
+    host_env_var: DB_HOST
+  database: fintech_demo
+  conn_max_lifetime: 10m
+  conn_max_idletime: 2m
+  max_idle_conns: 10
+  max_open_conns: 25
+  timeout: 5s
+
+# External CVU Provider (simulando inestabilidad)
+cvu-provider:
+  rest_client:
+    base_url: "https://api-cvu-provider.example.com/"
+    timeout: 5s
+    retries: 3
+    retry_verbs: "POST"
+    backoff: 500ms
+    circuit_breaker:
+      enabled: true
+
+# Email service
+email-service:
+  rest_client:
+    base_url: "https://api-email.example.com/"
+    timeout: 3s
+    retries: 2
+    retry_verbs: "POST"
+    backoff: 200ms
