@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"fintech-api/config"
-	"fintech-api/web"
+	"api-template/config"
+	"api-template/web"
 )
 
 const (

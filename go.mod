@@ -1,4 +1,4 @@
-module fintech-api
+module api-template
 
 go 1.24.5
 

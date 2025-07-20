@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"fintech-api/web"
+	"api-template/web"
 )
 
 var (

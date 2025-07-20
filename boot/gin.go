@@ -7,9 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"fintech-api/env"
-	"fintech-api/web"
-	webgin "fintech-api/web/gin"
+	"api-template/env"
+	"api-template/web"
+	webgin "api-template/web/gin"
 )
 
 type (

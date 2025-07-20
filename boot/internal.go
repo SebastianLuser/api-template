@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"fintech-api/config"
-	"fintech-api/web"
+	"api-template/config"
+	"api-template/web"
 )
 
 type (
