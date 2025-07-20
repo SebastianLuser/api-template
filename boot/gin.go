@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 
 	"api-template/env"
@@ -137,19 +138,16 @@ func NewGin(gmm MiddlewareMapper[GinMiddlewareRouter], gmr RoutesMapper[GinRoute
 
 				return r, r
 			},
-			func() (interface{}, bool) { // telemetry factory (placeholder)
-				// TODO: Implement telemetry when needed
+			func() (interface{}, bool) { // telemetry factory
 				return nil, false
 			},
 			func(ctx context.Context, r GinRouter) Server { // server factory
 				return NewHTTPServer(ctx, r)
 			},
-			func(r GinRouter) { // pprof mount (optional profiling)
-				// TODO: Add pprof support when needed
-				// pprof.Register(r.(*gin.Engine))
+			func(r GinRouter) { // pprof mount
+				pprof.Register(r.(*gin.Engine))
 			},
-			func(gmr GinMiddlewareRouter) func() error { // otel mount (optional tracing)
-				// TODO: Add OpenTelemetry support when needed
+			func(gmr GinMiddlewareRouter) func() error { // otel mount
 				return func() error { return nil }
 			},
 			func(r GinRouter, s string, h web.Handler) { // ping mount

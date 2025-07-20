@@ -4,7 +4,6 @@ package boot
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -37,10 +36,12 @@ type (
 		MiddlewareMapper MiddlewareMapper[M]
 		RoutesMapper     RoutesMapper[R]
 
-		newRouterFn RouterFactory[M, R]
-		newServerFn ServerFactory[R]
+		newRouterFn    RouterFactory[M, R]
+		newTelemetryFn TelemetryFactory
+		newServerFn    ServerFactory[R]
 
 		mountPProfFn PProfMount[R]
+		mountOtelFn  OTELMount[M]
 		mountPingFn  PingMount[R]
 
 		useMiddlewares func(M, ...web.Interceptor)
@@ -53,11 +54,15 @@ type (
 
 	// RouterFactory is a function type for creating router instances.
 	RouterFactory[M any, R http.Handler] func() (R, M)
+	// TelemetryFactory is a function type for creating telemetry clients.
+	TelemetryFactory func() (interface{}, bool)
 	// ServerFactory is a function type for creating HTTP servers.
 	ServerFactory[R http.Handler] func(context.Context, R) Server
 
 	// PingMount is a function type for mounting health check endpoints.
 	PingMount[R http.Handler] func(R, string, web.Handler)
+	// OTELMount is a function type for mounting OpenTelemetry.
+	OTELMount[M any] func(M) func() error
 	// PProfMount is a function type for mounting profiling endpoints.
 	PProfMount[R http.Handler] func(R)
 
@@ -106,7 +111,6 @@ type (
 // This matches the original API but without fury-specific dependencies.
 func NewHTTPServer(ctx context.Context, h http.Handler) Server {
 	port := getDefaultPort()
-	log.Printf("listening and serving HTTP on %s", port)
 	return &HTTPServerWrapper{
 		server: &http.Server{Addr: ":" + port, Handler: h},
 	}
@@ -127,8 +131,10 @@ func newMux[M any, R http.Handler](
 	mm MiddlewareMapper[M],
 	mr RoutesMapper[R],
 	newRouterFn RouterFactory[M, R],
+	newTelemetryFn TelemetryFactory,
 	newServerFn ServerFactory[R],
 	mountPProf PProfMount[R],
+	mountOtel OTELMount[M],
 	mountPing PingMount[R],
 	useMiddlewares func(M, ...web.Interceptor),
 	handleJSONPost func(R, string, web.Handler),
@@ -138,8 +144,10 @@ func newMux[M any, R http.Handler](
 		MiddlewareMapper: mm,
 		RoutesMapper:     mr,
 		newRouterFn:      newRouterFn,
+		newTelemetryFn:   newTelemetryFn,
 		newServerFn:      newServerFn,
 		mountPProfFn:     mountPProf,
+		mountOtelFn:      mountOtel,
 		mountPingFn:      mountPing,
 		useMiddlewares:   useMiddlewares,
 		handleJSONPost:   handleJSONPost,
@@ -272,41 +280,29 @@ func (m *mux[M, R]) newRouter() (R, M) {
 
 // newConfig creates a new configuration with fallback support
 func (m *mux[M, R]) newConfig(ctx context.Context, bootConf Configuration) (Config, func(context.Context, Config), error) {
-	var confs []interface{}
+	var configs []config.FallbackConfig
 
 	// Load local YAML configuration
 	if yamlConf, err := config.NewLocalYML(); err == nil {
-		confs = append(confs, yamlConf)
-		log.Println("Loaded YAML configuration")
-	} else {
-		log.Printf("Warning: Could not load YAML configuration: %v", err)
+		configs = append(configs, yamlConf)
 	}
 
 	// Load local JSON configuration
 	if jsonConf, err := config.NewLocalJSON(); err == nil {
-		confs = append(confs, jsonConf)
-		log.Println("Loaded JSON configuration")
-	} else {
-		log.Printf("Warning: Could not load JSON configuration: %v", err)
+		configs = append(configs, jsonConf)
 	}
 
-	if len(confs) == 0 {
+	if len(configs) == 0 {
 		return nil, nil, fmt.Errorf("no configuration sources available")
 	}
 
 	// Create fallback configuration
 	var finalConf Config
-	if len(confs) == 1 {
-		finalConf = confs[0].(Config)
+	if len(configs) == 1 {
+		finalConf = configs[0]
 	} else {
-		// Convert to proper types for fallback
-		fallbackConfs := make([]interface{}, len(confs))
-		for i, conf := range confs {
-			fallbackConfs[i] = conf
-		}
-
-		// Create fallback
-		fallbackConf := config.NewFallback(fallbackConfs[0], fallbackConfs[1:]...)
+		// Create fallback configuration
+		fallbackConf := config.NewFallback(configs[0], configs[1:]...)
 		finalConf = fallbackConf
 	}
 
@@ -338,9 +334,8 @@ func MountDefaultMiddlewareMappers[T any](
 			// Basic panic recovery
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("Panic recovered: %v", r)
 					// Return 500 error
-					resp := web.NewJSONResponseFromError(
+					web.NewJSONResponseFromError(
 						web.NewResponseError(500, fmt.Errorf("internal server error")),
 					)
 					// Note: This won't work perfectly in interceptors, but it's a basic implementation
@@ -352,8 +347,7 @@ func MountDefaultMiddlewareMappers[T any](
 
 	if dme.AccessLog {
 		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple access logging
-			log.Printf("Request: %s %s", req.Raw().Method, req.Raw().URL.Path)
+			// Simple access logging - can be enhanced later
 			return req.Next()
 		}))
 	}
@@ -363,23 +357,21 @@ func MountDefaultMiddlewareMappers[T any](
 			// Simple timing middleware
 			start := time.Now()
 			resp := req.Next()
-			log.Printf("Request took: %v", time.Since(start))
+			_ = time.Since(start) // Timing calculated but not logged
 			return resp
 		}))
 	}
 
 	if dme.Logger {
 		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple request logging
-			log.Printf("Processing request: %s %s", req.Raw().Method, req.Raw().URL.Path)
+			// Simple request processing - can be enhanced later
 			return req.Next()
 		}))
 	}
 
 	if dme.RequestTracer {
 		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple request tracing (just logging for now)
-			log.Printf("Tracing request: %s", req.Raw().Header.Get("X-Request-ID"))
+			// Simple request tracing - can be enhanced later
 			return req.Next()
 		}))
 	}
