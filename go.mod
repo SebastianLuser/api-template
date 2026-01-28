@@ -2,12 +2,7 @@ module api-template
 
 go 1.24.5
 
-require (
-	github.com/gin-contrib/pprof v1.5.3
-	github.com/gin-gonic/gin v1.10.1
-	github.com/olebedev/config v0.0.0-20220822221314-86fa169f9f99
-	go.uber.org/atomic v1.11.0
-)
+require github.com/gin-gonic/gin v1.10.1
 
 require (
 	github.com/bytedance/sonic v1.13.2 // indirect
@@ -34,6 +29,5 @@ require (
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

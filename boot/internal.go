@@ -1,37 +1,19 @@
-// Package boot provides tools for bootstrapping APIs with common configuration patterns and middleware.
+// Package boot provides tools for bootstrapping APIs for minimal CRUD.
 package boot
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
-	"time"
 
-	"api-template/config"
 	"api-template/web"
 )
 
 type (
-	// Config defines the interface for configuration access, providing methods to
-	// read values of different types with fallbacks.
-	Config interface {
-		Contains(context.Context, string, ...config.ContainsOption) bool
-		String(context.Context, string, string, ...config.Option) string
-		Int(context.Context, string, int, ...config.Option) int
-		Uint(context.Context, string, uint, ...config.Option) uint
-		Float(context.Context, string, float64, ...config.Option) float64
-		Bool(context.Context, string, bool, ...config.Option) bool
-		Duration(context.Context, string, time.Duration, ...config.Option) time.Duration
-		Map(context.Context, string, map[string]string, ...config.Option) map[string]string
-		List(context.Context, string, []string, ...config.Option) []string
-		Refresh(context.Context) (bool, error)
-		Subscribe(func(context.Context) error)
-		PrepareBulk() *config.BulkFetcher
-	}
+	// Config is a minimal config type for the boot layer (no external config package).
+	Config struct{}
 
-	// mux is the core structure that powers both Gin and other implementations,
-	// providing a generic abstraction for different web frameworks.
+	// mux is the core structure that powers both Gin and other implementations.
 	mux[M any, R http.Handler] struct {
 		MiddlewareMapper MiddlewareMapper[M]
 		RoutesMapper     RoutesMapper[R]
@@ -52,63 +34,30 @@ type (
 		shutdownFn ShutDownFn
 	}
 
-	// RouterFactory is a function type for creating router instances.
 	RouterFactory[M any, R http.Handler] func() (R, M)
-	// TelemetryFactory is a function type for creating telemetry clients.
-	TelemetryFactory func() (interface{}, bool)
-	// ServerFactory is a function type for creating HTTP servers.
-	ServerFactory[R http.Handler] func(context.Context, R) Server
+	TelemetryFactory                     func() (interface{}, bool)
+	ServerFactory[R http.Handler]        func(context.Context, R) Server
 
-	// PingMount is a function type for mounting health check endpoints.
-	PingMount[R http.Handler] func(R, string, web.Handler)
-	// OTELMount is a function type for mounting OpenTelemetry.
-	OTELMount[M any] func(M) func() error
-	// PProfMount is a function type for mounting profiling endpoints.
+	PingMount[R http.Handler]  func(R, string, web.Handler)
+	OTELMount[M any]           func(M) func() error
 	PProfMount[R http.Handler] func(R)
 
-	// MiddlewareMapper is a function type for mapping middleware to routers.
 	MiddlewareMapper[M any] func(context.Context, Config, M)
-	// RoutesMapper is a function type for mapping routes to routers.
-	RoutesMapper[R any] func(context.Context, Config, R)
+	RoutesMapper[R any]     func(context.Context, Config, R)
 
-	// Server defines the interface for HTTP servers with listen and shutdown capabilities.
 	Server interface {
 		ListenAndServe() error
 		Shutdown(context.Context) error
 	}
 
-	// DefaultMapperEnablings controls which middleware components are enabled by default.
-	DefaultMapperEnablings struct {
-		RequestElapsedTime bool
-		AccessLog          bool
-		RequestTracer      bool
-		Logger             bool
-		Recovery           bool
-	}
-
-	// DefaultMiddlewareOption is a function type for configuring default middleware options.
-	DefaultMiddlewareOption func(*DefaultMapperEnablings)
-
-	// Configuration structure for boot options.
-	Configuration struct {
-		CrowdConfigEnabled bool
-		FuryConfigEnabled  bool
-	}
-
-	// Option is a function type for configuring boot options.
-	Option func(*Configuration)
-
-	// ShutDownFn is a function type for server shutdown operations.
 	ShutDownFn func(context.Context) error
 
-	// HTTPServerWrapper wraps *http.Server to implement the Server interface
 	HTTPServerWrapper struct {
 		server *http.Server
 	}
 )
 
 // NewHTTPServer returns an HTTP server configured with the provided handler.
-// This matches the original API but without fury-specific dependencies.
 func NewHTTPServer(ctx context.Context, h http.Handler) Server {
 	port := getDefaultPort()
 	return &HTTPServerWrapper{
@@ -116,17 +65,14 @@ func NewHTTPServer(ctx context.Context, h http.Handler) Server {
 	}
 }
 
-// ListenAndServe starts the HTTP server
 func (w *HTTPServerWrapper) ListenAndServe() error {
 	return w.server.ListenAndServe()
 }
 
-// Shutdown gracefully shuts down the server
 func (w *HTTPServerWrapper) Shutdown(ctx context.Context) error {
 	return w.server.Shutdown(ctx)
 }
 
-// newMux creates a new mux structure with the provided components.
 func newMux[M any, R http.Handler](
 	mm MiddlewareMapper[M],
 	mr RoutesMapper[R],
@@ -155,113 +101,35 @@ func newMux[M any, R http.Handler](
 	}
 }
 
-// Run is a blocking operation that will start the server listening for connections.
-func (m *mux[M, R]) Run(opts ...Option) error {
+func (m *mux[M, R]) Run() error {
 	ctx, err := m.newBootableContext()
 	if err != nil {
 		return err
 	}
-
-	conf := Configuration{
-		CrowdConfigEnabled: false, // Disabled for API template
-		FuryConfigEnabled:  false, // Disabled for API template
-	}
-	for _, o := range opts {
-		o(&conf)
-	}
-
-	return m.run(ctx, conf)
+	return m.run(ctx)
 }
 
-// MustRun is a blocking operation that will start the server listening for connections.
-// If an error occurs, this function will panic.
-func (m *mux[M, R]) MustRun(opts ...Option) {
-	if err := m.Run(opts...); err != nil {
+func (m *mux[M, R]) MustRun() {
+	if err := m.Run(); err != nil {
 		panic(err)
 	}
 }
 
-// Shutdown stops the server gracefully without interrupting any connections.
 func (m *mux[M, R]) Shutdown() error {
 	if fn := m.shutdownFn; fn != nil {
-		ctx, err := m.newBootableContext()
-		if err != nil {
-			return err
-		}
+		ctx, _ := m.newBootableContext()
 		return fn(ctx)
 	}
 	return nil
 }
 
-// NoCrowdConfig disables crowd configuration from being used in a server
-func NoCrowdConfig() Option {
-	return func(gc *Configuration) {
-		gc.CrowdConfigEnabled = false
-	}
-}
-
-// NoMiddlewareRequestElapsedTime disables the request elapsed time middleware.
-func NoMiddlewareRequestElapsedTime() DefaultMiddlewareOption {
-	return func(dme *DefaultMapperEnablings) {
-		dme.RequestElapsedTime = false
-	}
-}
-
-// NoMiddlewareAccessLog disables the access log middleware.
-func NoMiddlewareAccessLog() DefaultMiddlewareOption {
-	return func(dme *DefaultMapperEnablings) {
-		dme.AccessLog = false
-	}
-}
-
-// NoMiddlewareRequestTracer disables the request tracer middleware.
-func NoMiddlewareRequestTracer() DefaultMiddlewareOption {
-	return func(dme *DefaultMapperEnablings) {
-		dme.RequestTracer = false
-	}
-}
-
-// NoMiddlewareLogger disables the logger middleware.
-func NoMiddlewareLogger() DefaultMiddlewareOption {
-	return func(dme *DefaultMapperEnablings) {
-		dme.Logger = false
-	}
-}
-
-// NoMiddlewareRecovery disables the recovery middleware.
-func NoMiddlewareRecovery() DefaultMiddlewareOption {
-	return func(dme *DefaultMapperEnablings) {
-		dme.Recovery = false
-	}
-}
-
-func (m *mux[M, R]) run(ctx context.Context, gc Configuration) error {
+func (m *mux[M, R]) run(ctx context.Context) error {
 	mr, mm := m.newRouter()
-	conf, poller, err := m.newConfig(ctx, gc)
-	if err != nil {
-		return err
-	}
+	conf := Config{}
 
-	// Start configuration polling if available
-	if poller != nil {
-		poller(ctx, conf)
-	}
-
-	// Setup shutdown registry
-	sr := NewShutdownRegistry(ctx)
-	defer sr.Shutdown(ctx)
-	ctx = NewContextWithShutdownRegistry(ctx, sr)
-
-	// Apply middleware
 	m.MiddlewareMapper(ctx, conf, mm)
-
-	// Add configuration endpoints
-	m.handleJSONGet(mr, "/config", newConfigServlet(conf).Get)
-
-	// Apply user routes
 	m.RoutesMapper(ctx, conf, mr)
 
-	// Create and start server
 	sv := m.newServerFn(ctx, mr)
 	m.shutdownFn = func(ctx context.Context) error {
 		return sv.Shutdown(ctx)
@@ -271,128 +139,15 @@ func (m *mux[M, R]) run(ctx context.Context, gc Configuration) error {
 
 func (m *mux[M, R]) newRouter() (R, M) {
 	mr, mm := m.newRouterFn()
-
 	m.mountPProfFn(mr)
 	m.mountPingFn(mr, "/ping", web.NewHandlerPing())
-
 	return mr, mm
 }
 
-// newConfig creates a new configuration with fallback support
-func (m *mux[M, R]) newConfig(ctx context.Context, bootConf Configuration) (Config, func(context.Context, Config), error) {
-	var configs []config.FallbackConfig
-
-	// Load local YAML configuration
-	if yamlConf, err := config.NewLocalYML(); err == nil {
-		configs = append(configs, yamlConf)
-	}
-
-	// Load local JSON configuration
-	if jsonConf, err := config.NewLocalJSON(); err == nil {
-		configs = append(configs, jsonConf)
-	}
-
-	if len(configs) == 0 {
-		return nil, nil, fmt.Errorf("no configuration sources available")
-	}
-
-	// Create fallback configuration
-	var finalConf Config
-	if len(configs) == 1 {
-		finalConf = configs[0]
-	} else {
-		// Create fallback configuration
-		fallbackConf := config.NewFallback(configs[0], configs[1:]...)
-		finalConf = fallbackConf
-	}
-
-	// Configuration refresh function
-	poller := func(ctx context.Context, conf Config) {
-		go config.NewRefreshPollingStrategy().Start(ctx, conf)
-	}
-
-	return finalConf, poller, nil
-}
-
 func (m *mux[M, R]) newBootableContext() (context.Context, error) {
-	// Simplified context creation without fury-specific dependencies
 	return context.Background(), nil
 }
 
-// MountDefaultMiddlewareMappers applies default middlewares
-func MountDefaultMiddlewareMappers[T any](
-	ctx context.Context,
-	dme DefaultMapperEnablings,
-	conf Config,
-	use func(...T),
-	newInterceptor func(fn web.Interceptor) T,
-) {
-	// Basic middleware implementations
-
-	if dme.Recovery {
-		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Basic panic recovery
-			defer func() {
-				if r := recover(); r != nil {
-					// Return 500 error
-					web.NewJSONResponseFromError(
-						web.NewResponseError(500, fmt.Errorf("internal server error")),
-					)
-					// Note: This won't work perfectly in interceptors, but it's a basic implementation
-				}
-			}()
-			return req.Next()
-		}))
-	}
-
-	if dme.AccessLog {
-		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple access logging - can be enhanced later
-			return req.Next()
-		}))
-	}
-
-	if dme.RequestElapsedTime {
-		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple timing middleware
-			start := time.Now()
-			resp := req.Next()
-			_ = time.Since(start) // Timing calculated but not logged
-			return resp
-		}))
-	}
-
-	if dme.Logger {
-		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple request processing - can be enhanced later
-			return req.Next()
-		}))
-	}
-
-	if dme.RequestTracer {
-		use(newInterceptor(func(req web.InterceptedRequest) web.Response {
-			// Simple request tracing - can be enhanced later
-			return req.Next()
-		}))
-	}
-}
-
-// NewMiddlewareOptions creates default middleware options
-func NewMiddlewareOptions(opts ...DefaultMiddlewareOption) DefaultMapperEnablings {
-	dme := DefaultMapperEnablings{
-		RequestElapsedTime: true,
-		AccessLog:          true,
-		RequestTracer:      false, // Disabled by default in template
-		Logger:             true,
-		Recovery:           true,
-	}
-	for _, o := range opts {
-		o(&dme)
-	}
-	return dme
-}
-
-// getDefaultPort gets the default port from environment variables or uses a default.
 func getDefaultPort() string {
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -132,7 +132,6 @@ func recoverHandlerResp(
 	if v := recover(); v != nil {
 		err := fmt.Errorf("%v", v)
 
-		// TODO: Replace with proper logging system
 		// For now, using standard log package
 		r, dumpError := httputil.DumpRequest(c.Request, true)
 		request := string(r)

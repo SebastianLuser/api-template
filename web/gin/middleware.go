@@ -38,7 +38,6 @@ type (
 	interceptedResponseKey struct{}
 )
 
-// TODO: Replace with proper monitoring system
 // noticeError is a placeholder for error monitoring
 func noticeError(ctx context.Context, origin string, err error) {
 	log.Printf("ERROR [%s]: %v", origin, err)
